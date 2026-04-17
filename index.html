@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>鯊魚人逃脫 - 最終修正版</title>
+    <style>
+        body { margin: 0; overflow: hidden; background: #000; font-family: sans-serif; }
+        #ui { position: absolute; top: 10px; left: 10px; color: #0f0; background: rgba(0,0,0,0.8); padding: 10px; border: 1px solid #0f0; }
+        #msg { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: red; font-size: 50px; display: none; background: rgba(0,0,0,0.9); padding: 20px; border: 5px solid red; }
+    </style>
+</head>
+<body>
+
+    <div id="ui">
+        <b>[ 遊戲偵測 ]</b><br>
+        狀態：<span id="status">載入模型中...</span><br>
+        殭屍：<span id="z-count">0</span>
+    </div>
+    <div id="msg">鯊魚被外星人抓到了！</div>
+
+    <script async src="https://unpkg.com/es-module-shims@1.3.6/dist/es-module-shims.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.154.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.154.0/examples/jsm/",
+                "@pixiv/three-vrm": "https://unpkg.com/@pixiv/three-vrm@2.0.0/lib/three-vrm.module.js"
+            }
+        }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+
+        let scene, camera, renderer, clock, player;
+        let zombies = [];
+        let isGameOver = false;
+        const keys = {};
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x050505);
+            scene.fog = new THREE.Fog(0x050505, 5, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 10, 15); // 把相機拉高一點看全局
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            clock = new THREE.Clock();
+
+            // 強化燈光
+            scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+            const sun = new THREE.DirectionalLight(0xffffff, 1);
+            sun.position.set(10, 20, 10);
+            scene.add(sun);
+
+            // 地面
+            scene.add(new THREE.GridHelper(100, 50, 0x00ff00, 0x111111));
+
+            const loader = new GLTFLoader();
+            loader.register((parser) => new VRMLoaderPlugin(parser));
+
+            // 1. 載入鯊魚人 (主角)
+            loader.load('./public/assets/SharkPerson.vrm', (gltf) => {
+                const vrm = gltf.userData.vrm;
+                player = vrm.scene;
+                player.position.set(0, 0, 0); // 確保在原點
+                scene.add(player);
+                VRMUtils.rotateVRM0(vrm);
+                document.getElementById('status').innerText = "鯊魚人登場！";
+            });
+
+            // 2. 載入外星人 (敵人) - 採用多次載入確保每個都是獨立對象
+            const zombieCount = 8;
+            for (let i = 0; i < zombieCount; i++) {
+                loader.load('./public/assets/CoolAlien.vrm', (gltf) => {
+                    const vrm = gltf.userData.vrm;
+                    const z = vrm.scene;
+                    
+                    // 隨機散佈在遠處，不要放在 (0,0,0)
+                    const spawnDist = 15 + Math.random() * 10;
+                    const angle = Math.random() * Math.PI * 2;
+                    z.position.set(Math.cos(angle) * spawnDist, 0, Math.sin(angle) * spawnDist);
+                    
+                    VRMUtils.rotateVRM0(vrm);
+                    
+                    z.userData = {
+                        vx: (Math.random() - 0.5) * 0.15,
+                        vz: (Math.random() - 0.5) * 0.15
+                    };
+
+                    scene.add(z);
+                    zombies.push(z);
+                    document.getElementById('z-count').innerText = zombies.length;
+                });
+            }
+
+            window.addEventListener('keydown', (e) => keys[e.code] = true);
+            window.addEventListener('keyup', (e) => keys[e.code] = false);
+        }
+
+        function animate() {
+            if (isGameOver) return;
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+
+            // 玩家移動
+            if (player) {
+                const moveSpeed = 0.2;
+                let moved = false;
+                if (keys['KeyW']) { player.position.z -= moveSpeed; moved = true; }
+                if (keys['KeyS']) { player.position.z += moveSpeed; moved = true; }
+                if (keys['KeyA']) { player.position.x -= moveSpeed; moved = true; }
+                if (keys['KeyD']) { player.position.x += moveSpeed; moved = true; }
+
+                if (moved) {
+                    // 相機緩動跟隨
+                    camera.position.lerp(new THREE.Vector3(player.position.x, player.position.y + 8, player.position.z + 12), 0.1);
+                    camera.lookAt(player.position);
+                }
+            }
+
+            // 殭屍移動與碰撞
+            zombies.forEach((z) => {
+                z.position.x += z.userData.vx;
+                z.position.z += z.userData.vz;
+
+                // 邊界檢查
+                if (Math.abs(z.position.x) > 40) z.userData.vx *= -1;
+                if (Math.abs(z.position.z) > 40) z.userData.vz *= -1;
+
+                // 碰撞檢查
+                if (player) {
+                    const dx = player.position.x - z.position.x;
+                    const dz = player.position.z - z.position.z;
+                    const dist = Math.sqrt(dx*dx + dz*dz); // 平面距離檢測更準確
+
+                    // 提高容錯率：只有距離小於 1.5 且玩家已載入完成才觸發
+                    if (dist < 1.5 && zombies.length > 0) {
+                        gameOver();
+                    }
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            document.getElementById('msg').style.display = 'block';
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
